@@ -46,7 +46,11 @@
       home.activation = mkMerge (map (provider:
         let minFlag = optionalString cfg.minimal " --minimal"; in {
           "gsd-install-${provider}" = hm.dag.entryAfter [ "linkGeneration" ] ''
-            $DRY_RUN_CMD ${cfg.gsdPackage}/bin/get-shit-done-cc ${gsdFlag.${provider}}${minFlag} --yes || true
+            # Detach stdin so GSD's installer always takes the
+            # non-interactive path regardless of how activation was
+            # invoked (build-profiles attaches the user's tty, which
+            # makes GSD prompt despite --yes).
+            $DRY_RUN_CMD ${cfg.gsdPackage}/bin/get-shit-done-cc ${gsdFlag.${provider}}${minFlag} --yes < /dev/null || true
           '';
         }
       ) cfg.providers);
