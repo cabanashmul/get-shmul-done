@@ -22,11 +22,24 @@ let
     ${endMarker}
   '';
 
-  instructionsFile = {
-    "claude-code" = "${config.home.homeDirectory}/.claude/CLAUDE.md";
-    "codex"       = "${config.home.homeDirectory}/.codex/AGENTS.md";
-    "copilot"     = "${config.home.homeDirectory}/.copilot/copilot-instructions.md";
+  instructionsRelPath = {
+    "claude-code" = ".claude/CLAUDE.md";
+    "codex"       = ".codex/AGENTS.md";
+    "copilot"     = ".copilot/copilot-instructions.md";
   };
+  instructionsFile = mapAttrs
+    (_: rel: "${config.home.homeDirectory}/${rel}")
+    instructionsRelPath;
+
+  # Providers whose instructions file we own end-to-end (GSD's installer
+  # never writes them). Place via home.file so the vault block is baked
+  # in at build time, not appended on activation.
+  declarativeProviders = filter (p: p != "copilot") gsdCfg.providers;
+
+  # Providers where GSD's installer generates the file at activation
+  # time. We can't take ownership without breaking GSD, so we keep the
+  # sentinel-bracketed activation-time append for these.
+  imperativeProviders  = filter (p: p == "copilot") gsdCfg.providers;
 
   captureScript = pkgs.writeShellApplication {
     name = "gsd-capture-to-vault";
@@ -168,26 +181,40 @@ in {
       );
     }
 
-    (mkIf cfg.injectInstructions.enable (
-      let
-        blockFile = pkgs.writeText "gsd-vault-block.md" vaultBlock;
-      in {
-        home.activation = listToAttrs (map (provider: {
-          name  = "gsd-vault-inject-${provider}";
-          value = hm.dag.entryAfter [ "gsd-install-${provider}" ] ''
-            $DRY_RUN_CMD ${injectScript}/bin/gsd-vault-inject \
-              "${instructionsFile.${provider}}" \
-              "${blockFile}"
-          '';
-        }) gsdCfg.providers);
+    (mkIf cfg.injectInstructions.enable (mkMerge [
+      # Declarative path: home.file owns the whole instructions file
+      # for providers GSD doesn't write (claude-code, codex). Vault
+      # block is baked into the file at build time.
+      {
+        home.file = listToAttrs (map (provider: {
+          name  = instructionsRelPath.${provider};
+          value = { text = vaultBlock; };
+        }) declarativeProviders);
       }
-    ))
+
+      # Imperative path: for providers GSD writes (copilot), append the
+      # vault block via activation script after gsd-install runs.
+      (mkIf (imperativeProviders != []) (
+        let
+          blockFile = pkgs.writeText "gsd-vault-block.md" vaultBlock;
+        in {
+          home.activation = listToAttrs (map (provider: {
+            name  = "gsd-vault-inject-${provider}";
+            value = hm.dag.entryAfter [ "gsd-install-${provider}" ] ''
+              $DRY_RUN_CMD ${injectScript}/bin/gsd-vault-inject \
+                "${instructionsFile.${provider}}" \
+                "${blockFile}"
+            '';
+          }) imperativeProviders);
+        }
+      ))
+    ]))
 
     (mkIf cfg.captureHook.enable {
       home.activation = listToAttrs (map (rt:
         if rt == "claude-code" then {
           name  = "gsd-stop-hook-claude-code";
-          value = hm.dag.entryAfter [ "gsd-vault-inject-claude-code" ] ''
+          value = hm.dag.entryAfter [ "gsd-install-claude-code" ] ''
             settings="${config.home.homeDirectory}/.claude/settings.json"
             mkdir -p "$(dirname "$settings")"
             [ -f "$settings" ] || echo '{}' > "$settings"
@@ -205,7 +232,7 @@ in {
           '';
         } else {
           name  = "gsd-stop-hook-codex";
-          value = hm.dag.entryAfter [ "gsd-vault-inject-codex" ] ''
+          value = hm.dag.entryAfter [ "gsd-install-codex" ] ''
             cfgFile="${config.home.homeDirectory}/.codex/config.toml"
             mkdir -p "$(dirname "$cfgFile")"
             touch "$cfgFile"
