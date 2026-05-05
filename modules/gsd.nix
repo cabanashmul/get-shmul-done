@@ -50,7 +50,7 @@
             # non-interactive path regardless of how activation was
             # invoked (build-profiles attaches the user's tty, which
             # makes GSD prompt despite --yes).
-            $DRY_RUN_CMD ${cfg.gsdPackage}/bin/get-shit-done-cc ${gsdFlag.${provider}}${minFlag} --yes < /dev/null || true
+            $DRY_RUN_CMD ${cfg.gsdPackage}/bin/get-shit-done-cc ${gsdFlag.${provider}}${minFlag} --global --yes < /dev/null || true
           '';
         }
       ) cfg.providers);
