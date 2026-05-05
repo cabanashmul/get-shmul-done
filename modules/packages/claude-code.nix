@@ -27,13 +27,18 @@
       pname = "claude-code";
       inherit version src;
 
-      nativeBuildInputs = with pkgs; [ makeWrapper ]
-        ++ pkgs.lib.optional pkgs.stdenv.isLinux pkgs.autoPatchelfHook;
+      nativeBuildInputs = with pkgs; [ makeWrapper ];
 
-      buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux (with pkgs; [
-        stdenv.cc.cc.lib
-        zlib
-      ]);
+      # claude.exe is a Bun single-file executable (SEA): the embedded
+      # JS payload lives in a trailer appended after the ELF sections.
+      # autoPatchelfHook + strip rewrite the binary and corrupt that
+      # trailer (~400 bytes shorter), which makes Bun fall back to its
+      # generic CLI instead of running Claude Code. Skip both. WSL +
+      # most glibc distros already have /lib64/ld-linux-x86-64.so.2 and
+      # stock libstdc++/zlib, so the binary runs unpatched.
+      dontStrip            = true;
+      dontPatchELF         = true;
+      dontAutoPatchelf     = true;
 
       unpackPhase = ''
         runHook preUnpack
