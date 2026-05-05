@@ -16,7 +16,7 @@
       "copilot"     = "--copilot";
     };
   in {
-    imports = [ ./vault.nix ];
+    imports = [ ../hm/vault.nix ];
 
     options.programs.gsd = {
       enable = mkEnableOption "GSD multi-runtime AI tooling";
