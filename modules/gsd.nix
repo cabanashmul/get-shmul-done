@@ -41,7 +41,10 @@
     };
 
     config = mkIf cfg.enable {
-      home.packages = map (p: pkgFor.${p}) cfg.providers;
+      # Provider binaries + the gsd-cc package itself, which exports
+      # get-shit-done-cc, gsd-sdk and gsd-tools. Adding it to PATH
+      # avoids the installer's "~/.local/bin shim" fallback.
+      home.packages = [ cfg.gsdPackage ] ++ map (p: pkgFor.${p}) cfg.providers;
 
       home.activation = mkMerge (map (provider:
         let minFlag = optionalString cfg.minimal " --minimal"; in {
