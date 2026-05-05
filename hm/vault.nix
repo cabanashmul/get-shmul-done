@@ -6,8 +6,7 @@ let
   beginMarker = "<!-- BEGIN gsd vault block -->";
   endMarker   = "<!-- END gsd vault block -->";
 
-  vaultBlock = ''
-    ${beginMarker}
+  vaultSection = ''
     ## Persistent memory: shmulistan vault
 
     A local Obsidian vault lives at `${cfg.path}`. Treat it as long-term
@@ -19,7 +18,14 @@ let
       for naming + folder conventions.
     - PARA folders: ${concatStringsSep ", " cfg.paraFolders}.
     - When in doubt, drop a quick note into `00_Inbox/` for later triage.
-    ${endMarker}
+  '';
+
+  preambleSection = optionalString (cfg.injectInstructions.preamble != "")
+    "${cfg.injectInstructions.preamble}\n\n";
+
+  vaultBlock = ''
+    ${beginMarker}
+    ${preambleSection}${vaultSection}${endMarker}
   '';
 
   instructionsRelPath = {
@@ -136,6 +142,17 @@ in {
       type    = types.bool;
       default = true;
       description = "Append a vault-pointer block to each provider's instructions file.";
+    };
+
+    injectInstructions.preamble = mkOption {
+      type    = types.lines;
+      default = "";
+      description = ''
+        Additional markdown content prepended above the vault section
+        inside the bracketed gsd block. Use it for personal policy
+        (commit discipline, package conventions, session rituals) that
+        applies to every runtime — claude-code, codex, and copilot.
+      '';
     };
 
     captureHook = {
