@@ -1,0 +1,104 @@
+name: update
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: bump versions + hashes
+        id: bump
+        run: |
+          set -euo pipefail
+          changed=()
+
+          bump_main () {
+            local file="$1" pkg="$2"
+            local cur new url
+            cur=$(grep -oP 'version = "\K[^"]+' "$file" | head -1)
+            new=$(curl -fsSL "https://registry.npmjs.org/${pkg}/latest" | jq -r .version)
+            [[ "$cur" == "$new" ]] && return 0
+
+            url="https://registry.npmjs.org/${pkg}/-/$(basename "$pkg")-${new}.tgz"
+            local raw sri
+            raw=$(nix-prefetch-url --type sha256 "$url")
+            sri=$(nix hash convert --hash-algo sha256 --to sri "$raw")
+
+            sed -i "0,/version = \"${cur}\"/s||version = \"${new}\"|" "$file"
+            sed -i "0,|hash = \"sha256-[^\"]*\"|s||hash = \"${sri}\"|" "$file"
+
+            echo "${pkg}: ${cur} → ${new}"
+            changed+=("${pkg} ${cur}→${new}")
+          }
+
+          bump_platform_block () {
+            local file="$1" base_pkg="$2" url_pattern_template="$3"
+            local new
+            new=$(grep -oP 'version = "\K[^"]+' "$file" | head -1)
+            for entry in 'x86_64-linux:linux-x64' 'aarch64-linux:linux-arm64' 'x86_64-darwin:darwin-x64' 'aarch64-darwin:darwin-arm64'; do
+              local sys=${entry%:*} suffix=${entry#*:}
+              local url="${url_pattern_template//VERSION/$new}"
+              url="${url//SUFFIX/$suffix}"
+              local raw sri
+              raw=$(nix-prefetch-url --type sha256 "$url")
+              sri=$(nix hash convert --hash-algo sha256 --to sri "$raw")
+              sed -i -E "s|(\"${sys}\"\\s*=\\s*\\{[^}]*hash = )\"sha256-[^\"]*\"|\\1\"${sri}\"|" "$file"
+            done
+          }
+
+          bump_main modules/packages/claude-code.nix '@anthropic-ai/claude-code'
+          bump_platform_block modules/packages/claude-code.nix \
+            '@anthropic-ai/claude-code' \
+            'https://registry.npmjs.org/@anthropic-ai/claude-code-SUFFIX/-/claude-code-SUFFIX-VERSION.tgz' || true
+
+          bump_main modules/packages/codex.nix '@openai/codex'
+          bump_platform_block modules/packages/codex.nix \
+            '@openai/codex' \
+            'https://registry.npmjs.org/@openai/codex/-/codex-VERSION-SUFFIX.tgz' || true
+
+          bump_main modules/packages/copilot.nix '@github/copilot'
+          bump_main modules/packages/gsd.nix    'get-shit-done-cc'
+
+          if [[ ${#changed[@]} -eq 0 ]]; then
+            echo "no_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "no_changes=false"
+              echo "summary<<EOF"
+              printf '%s\n' "${changed[@]}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: verify build
+        if: steps.bump.outputs.no_changes != 'true'
+        run: |
+          nix build .#claude-code .#codex .#copilot .#gsd-cc \
+            --no-link --print-build-logs --impure
+
+      - name: open PR
+        if: steps.bump.outputs.no_changes != 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(deps): weekly npm bumps"
+          branch: auto-update/weekly
+          title: "chore(deps): weekly npm bumps"
+          body: |
+            Auto-update of npm-pinned runtimes.
+
+            ${{ steps.bump.outputs.summary }}
+          delete-branch: true
