@@ -28,6 +28,25 @@ let
     "copilot"     = "${config.home.homeDirectory}/.copilot/copilot-instructions.md";
   };
 
+  captureScript = pkgs.writeShellApplication {
+    name = "gsd-capture-to-vault";
+    runtimeInputs = with pkgs; [ jq coreutils ];
+    text = builtins.readFile ../stop-hook/capture-to-vault.sh;
+  };
+
+  # Wraps capture-to-vault with vault path + inbox dir baked in via env.
+  hookCommand = pkgs.writeShellApplication {
+    name = "gsd-stop-hook";
+    runtimeInputs = [ captureScript ];
+    text = ''
+      export SHMULISTAN_VAULT="${cfg.path}"
+      export SHMULISTAN_INBOX="${cfg.captureHook.inboxDir}"
+      exec ${captureScript}/bin/gsd-capture-to-vault "$@"
+    '';
+  };
+
+  hookCmdPath = "${hookCommand}/bin/gsd-stop-hook";
+
   injectScript = pkgs.writeShellApplication {
     name = "gsd-vault-inject";
     runtimeInputs = [ pkgs.gnused pkgs.coreutils ];
@@ -92,6 +111,27 @@ in {
       default = true;
       description = "Append a vault-pointer block to each provider's instructions file.";
     };
+
+    captureHook = {
+      enable = mkOption {
+        type    = types.bool;
+        default = true;
+        description = "Wire a Stop-hook in each runtime that captures sessions to the vault inbox.";
+      };
+
+      runtimes = mkOption {
+        type    = types.listOf (types.enum [ "claude-code" "codex" ]);
+        default = filter (r: r != "copilot") gsdCfg.providers;
+        defaultText = literalExpression "filter (r: r != \"copilot\") config.programs.gsd.providers";
+        description = "Runtimes to wire the Stop hook into. Copilot is excluded — its sessionEnd has no transcript_path.";
+      };
+
+      inboxDir = mkOption {
+        type    = types.str;
+        default = "00_Inbox";
+        description = "Vault subdirectory for captured session notes.";
+      };
+    };
   };
 
   config = mkIf (gsdCfg.enable && cfg.enable) (mkMerge [
@@ -129,5 +169,46 @@ in {
         }) gsdCfg.providers);
       }
     ))
+
+    (mkIf cfg.captureHook.enable {
+      home.activation = listToAttrs (map (rt:
+        if rt == "claude-code" then {
+          name  = "gsd-stop-hook-claude-code";
+          value = hm.dag.entryAfter [ "gsd-vault-inject-claude-code" ] ''
+            settings="${config.home.homeDirectory}/.claude/settings.json"
+            mkdir -p "$(dirname "$settings")"
+            [ -f "$settings" ] || echo '{}' > "$settings"
+            tmp=$(mktemp)
+            $DRY_RUN_CMD ${pkgs.jq}/bin/jq \
+              --arg cmd "${hookCmdPath} claude-code" '
+                .hooks //= {} |
+                .hooks.Stop //= [] |
+                .hooks.Stop |= (
+                  map(select((.hooks // []) | all(.command != $cmd)))
+                  + [{matcher: "*", hooks: [{type: "command", command: $cmd}]}]
+                )
+              ' "$settings" > "$tmp"
+            $DRY_RUN_CMD mv "$tmp" "$settings"
+          '';
+        } else {
+          name  = "gsd-stop-hook-codex";
+          value = hm.dag.entryAfter [ "gsd-vault-inject-codex" ] ''
+            cfgFile="${config.home.homeDirectory}/.codex/config.toml"
+            mkdir -p "$(dirname "$cfgFile")"
+            touch "$cfgFile"
+            tmp=$(mktemp)
+            ${pkgs.gnused}/bin/sed '/# BEGIN gsd stop hook/,/# END gsd stop hook/d' "$cfgFile" > "$tmp"
+            ${pkgs.gnused}/bin/sed -e :a -e '/^$/{$d;N;ba' -e '}' "$tmp" > "$cfgFile"
+            [ -s "$cfgFile" ] && printf '\n' >> "$cfgFile"
+            cat >> "$cfgFile" <<EOF
+# BEGIN gsd stop hook
+[[hooks.Stop]]
+command = "${hookCmdPath} codex"
+# END gsd stop hook
+EOF
+          '';
+        }
+      ) cfg.captureHook.runtimes);
+    })
   ]);
 }
