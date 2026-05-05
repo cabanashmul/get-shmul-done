@@ -56,7 +56,20 @@ let
       block_file="$2"
 
       mkdir -p "$(dirname "$target")"
+
+      # If target is a symlink (e.g. a stale Nix-store link from a
+      # previous HM generation), replace it with a real, writable file
+      # seeded from the link target's content.
+      if [ -L "$target" ]; then
+        seed=""
+        if [ -r "$target" ]; then
+          seed="$(cat "$target")"
+        fi
+        rm -f "$target"
+        printf '%s' "$seed" > "$target"
+      fi
       touch "$target"
+      chmod u+w "$target"
 
       # Strip any existing block (idempotent).
       tmp=$(mktemp)
@@ -136,7 +149,7 @@ in {
 
   config = mkIf (gsdCfg.enable && cfg.enable) (mkMerge [
     {
-      home.activation."gsd-vault-clone" = hm.dag.entryAfter [ "writeBoundary" ] (
+      home.activation."gsd-vault-clone" = hm.dag.entryAfter [ "linkGeneration" ] (
         optionalString cfg.cloneIfMissing ''
           if [ ! -d "${cfg.path}/.git" ]; then
             $DRY_RUN_CMD ${pkgs.git}/bin/git clone ${cfg.repoUrl} "${cfg.path}" || true

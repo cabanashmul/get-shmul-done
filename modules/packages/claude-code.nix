@@ -54,7 +54,13 @@
         cp -r ./. $out/lib/node_modules/@anthropic-ai/claude-code/
 
         mkdir -p $out/bin
-        ln -s $out/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe $out/bin/claude
+        # claude.exe is a Bun single-file executable that picks its
+        # embedded entry from argv[0]. Invoking it as "claude" makes
+        # Bun fall back to its generic CLI, so force argv[0]=claude.exe.
+        makeWrapper \
+          $out/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe \
+          $out/bin/claude \
+          --argv0 claude.exe
 
         runHook postInstall
       '';
